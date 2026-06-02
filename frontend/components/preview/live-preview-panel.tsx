@@ -1,12 +1,29 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { cn } from '@/lib/utils';
-import { useBuilderStore } from '@/store/builder-store';
-import { type ApplicationType, type ThemeType, THEMES } from '@/types';
+import { useBuilderStore, type GeneratedFile } from '@/store/builder-store';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Monitor, Tablet, Smartphone, RefreshCw, Eye, EyeOff } from 'lucide-react';
+import {
+  Monitor,
+  Tablet,
+  Smartphone,
+  RefreshCw,
+  Eye,
+  EyeOff,
+  Code2,
+  EyeIcon,
+  Loader2,
+  Sparkles,
+  FileIcon,
+  FolderIcon,
+  ChevronRight,
+  ChevronDown,
+  Maximize2,
+  X,
+} from 'lucide-react';
+import { renderSchemaPreview } from '@/components/preview/section-renderers';
 
 const DEVICES = [
   { id: 'desktop' as const, icon: Monitor, label: 'Desktop' },
@@ -20,11 +37,7 @@ const DEVICE_WIDTHS: Record<string, string> = {
   mobile: 'w-[375px]',
 };
 
-interface PreviewSkeletonProps {
-  applicationType: ApplicationType;
-}
-
-function PreviewSkeleton({ applicationType }: PreviewSkeletonProps) {
+function PreviewSkeleton() {
   return (
     <div className="h-full flex flex-col p-4 space-y-4 animate-pulse">
       <div className="flex items-center justify-between">
@@ -46,486 +59,189 @@ function PreviewSkeleton({ applicationType }: PreviewSkeletonProps) {
   );
 }
 
-const themeColors = THEMES.reduce(
-  (acc, t) => {
-    acc[t.id] = t.colors;
-    return acc;
-  },
-  {} as Record<
-    string,
-    {
-      primary: string;
-      secondary: string;
-      accent: string;
-      background: string;
-      surface: string;
-      text: string;
-    }
-  >,
-);
+function EmptyPreview() {
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-3 text-center p-8">
+      <div className="flex items-center justify-center w-12 h-12 rounded-full bg-muted">
+        <Sparkles className="h-6 w-6 text-muted-foreground" />
+      </div>
+      <div>
+        <p className="text-sm font-semibold text-foreground">No preview yet</p>
+        <p className="text-xs text-muted-foreground mt-1">
+          Fill in your project details and generate a schema to see a live preview.
+        </p>
+      </div>
+    </div>
+  );
+}
 
-function getEffectiveColors(theme: ThemeType) {
-  if (theme === 'custom-brand') {
-    const root = document.documentElement;
-    return {
-      primary: root.style.getPropertyValue('--custom-primary') || '#10b981',
-      secondary: root.style.getPropertyValue('--custom-secondary') || '#059669',
-      accent: root.style.getPropertyValue('--custom-accent') || '#34d399',
-      background: root.style.getPropertyValue('--custom-background') || '#f0fdf4',
-      surface: '#ffffff',
-      text: '#064e3b',
-    };
+function groupByDir(files: GeneratedFile[]): Map<string, GeneratedFile[]> {
+  const dirs = new Map<string, GeneratedFile[]>();
+  for (const f of files) {
+    const parts = f.path.split('/');
+    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '.';
+    if (!dirs.has(dir)) dirs.set(dir, []);
+    dirs.get(dir)!.push(f);
   }
-  return themeColors[theme] || themeColors['corporate-blue'];
+  return dirs;
 }
 
-function renderWebsitePreview(
-  projectName: string,
-  selectedFeatures: string[],
-  colors: {
-    primary: string;
-    secondary: string;
-    accent: string;
-    background: string;
-    surface: string;
-    text: string;
-  },
-) {
+function FileTree({
+  files,
+  selectedIndex,
+  onSelect,
+}: {
+  files: GeneratedFile[];
+  selectedIndex: number;
+  onSelect: (index: number) => void;
+}) {
+  const dirs = groupByDir(files);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  const sortedDirs = Array.from(dirs.entries()).sort(([a], [b]) => {
+    if (a === '.') return -1;
+    if (b === '.') return 1;
+    return a.localeCompare(b);
+  });
+
+  let flatIndex = 0;
+
   return (
-    <div className="h-full flex flex-col" style={{ backgroundColor: colors.background }}>
-      <div
-        className="px-6 py-4 border-b flex items-center justify-between"
-        style={{ backgroundColor: colors.surface, borderColor: `${colors.text}20` }}
-      >
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-lg" style={{ color: colors.text }}>
-            {projectName || 'Company'}
-          </span>
-        </div>
-        <div className="flex gap-6">
-          {['Home', 'About', 'Services', 'Contact'].map((item) => (
-            <span
-              key={item}
-              className="text-sm font-medium cursor-pointer"
-              style={{ color: `${colors.text}cc` }}
-            >
-              {item}
-            </span>
-          ))}
-        </div>
+    <div className="h-full overflow-y-auto bg-[#252526] border-r border-[#3c3c3c] w-52 shrink-0">
+      <div className="px-3 py-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+        Explorer
       </div>
-      <div
-        className="flex-1 flex items-center justify-center px-8 py-12"
-        style={{
-          background: `linear-gradient(135deg, ${colors.primary}15, ${colors.secondary}15)`,
-        }}
-      >
-        <div className="text-center max-w-3xl">
-          <span
-            className="text-5xl font-bold mb-4 block"
-            style={{
-              background: `linear-gradient(135deg, ${colors.primary}, ${colors.secondary})`,
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-            }}
-          >
-            {projectName || 'Your Business Name'}
-          </span>
-          <p className="text-lg mb-6" style={{ color: `${colors.text}aa` }}>
-            Empowering your business with innovative solutions
-          </p>
-          <div className="flex gap-4 justify-center">
+      {sortedDirs.map(([dir, dirFiles]) => {
+        const isCollapsed = collapsed.has(dir);
+        return (
+          <div key={dir}>
             <button
-              className="px-6 py-3 rounded-lg font-semibold text-white shadow-lg"
-              style={{
-                background: `linear-gradient(135deg, ${colors.primary}, ${colors.secondary})`,
+              type="button"
+              onClick={() => {
+                const next = new Set(collapsed);
+                if (isCollapsed) next.delete(dir);
+                else next.add(dir);
+                setCollapsed(next);
               }}
+              className="w-full flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-gray-200 hover:bg-[#2a2d2e]"
             >
-              Get Started
+              {isCollapsed ? (
+                <ChevronRight className="h-3 w-3 shrink-0" />
+              ) : (
+                <ChevronDown className="h-3 w-3 shrink-0" />
+              )}
+              <FolderIcon className="h-3 w-3 shrink-0 text-blue-400" />
+              <span className="truncate">{dir === '.' ? 'root' : dir}</span>
             </button>
-            <button
-              className="px-6 py-3 rounded-lg font-semibold border shadow-sm"
-              style={{ borderColor: colors.primary, color: colors.primary }}
-            >
-              Learn More
-            </button>
+            {!isCollapsed &&
+              dirFiles.map((f) => {
+                const idx = flatIndex;
+                flatIndex += 1;
+                return (
+                  <button
+                    key={f.path}
+                    type="button"
+                    onClick={() => onSelect(idx)}
+                    className={cn(
+                      'w-full flex items-center gap-1.5 pl-6 pr-2 py-1 text-xs transition-colors text-left',
+                      idx === selectedIndex
+                        ? 'bg-[#37373d] text-white'
+                        : 'text-gray-400 hover:text-gray-200 hover:bg-[#2a2d2e]',
+                    )}
+                  >
+                    <FileIcon className="h-3 w-3 shrink-0 text-gray-500" />
+                    <span className="truncate">{f.path.split('/').pop()}</span>
+                  </button>
+                );
+              })}
           </div>
-        </div>
-      </div>
-      <div className="px-8 py-10" style={{ backgroundColor: colors.surface }}>
-        <div className="text-center mb-6">
-          <h3 className="text-2xl font-bold mb-2" style={{ color: colors.text }}>
-            Our Features
-          </h3>
-          <p className="text-sm" style={{ color: `${colors.text}99` }}>
-            Discover what makes us different
-          </p>
-        </div>
-        <div className="grid grid-cols-3 gap-4">
-          {selectedFeatures.slice(0, 6).map((feature, idx) => (
-            <div
-              key={idx}
-              className="p-4 rounded-lg border shadow-sm"
-              style={{ backgroundColor: colors.background, borderColor: `${colors.text}20` }}
-            >
-              <span className="text-sm font-semibold" style={{ color: colors.text }}>
-                {feature}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="px-8 py-8" style={{ backgroundColor: colors.primary }}>
-        <div className="flex items-center justify-between">
-          <div className="text-white">
-            <p className="text-lg font-bold mb-1">Ready to get started?</p>
-            <p className="text-sm opacity-90">Contact us today for a free consultation</p>
-          </div>
-          <button className="px-6 py-3 bg-white rounded-lg font-semibold shadow-lg">
-            Contact Us
-          </button>
-        </div>
-      </div>
+        );
+      })}
     </div>
   );
 }
 
-function renderCRMPreview(
-  projectName: string,
-  colors: {
-    primary: string;
-    secondary: string;
-    accent: string;
-    background: string;
-    surface: string;
-    text: string;
-  },
-) {
+function CodePreview({ files }: { files: GeneratedFile[] }) {
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const current = files[selectedIndex] || files[0];
+
   return (
-    <div className="h-full flex" style={{ backgroundColor: colors.background }}>
-      <div
-        className="w-48 border-r"
-        style={{ backgroundColor: colors.surface, borderColor: `${colors.text}10` }}
-      >
-        <div className="px-4 py-4 border-b" style={{ borderColor: `${colors.text}10` }}>
-          <span className="font-bold text-sm" style={{ color: colors.text }}>
-            {projectName || 'CRM Pro'}
+    <div className="h-full flex bg-[#1e1e1e]">
+      <FileTree files={files} selectedIndex={selectedIndex} onSelect={setSelectedIndex} />
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2 bg-[#2d2d2d] border-b border-[#404040] shrink-0">
+          <div className="flex items-center gap-1 overflow-x-auto">
+            {files.slice(0, 15).map((f, i) => (
+              <button
+                key={f.path}
+                type="button"
+                onClick={() => setSelectedIndex(i)}
+                className={cn(
+                  'px-3 py-1 text-xs font-mono rounded-t transition-colors whitespace-nowrap',
+                  i === selectedIndex
+                    ? 'bg-[#1e1e1e] text-white border-t border-[#404040]'
+                    : 'text-gray-500 hover:text-gray-300',
+                )}
+              >
+                {f.path.split('/').pop()}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-gray-500 shrink-0 ml-2">
+            {current.content.length.toLocaleString()} bytes
           </span>
         </div>
-        <nav className="px-3 py-4 space-y-1">
-          {['Dashboard', 'Customers', 'Leads', 'Deals', 'Reports'].map((label, idx) => (
-            <div
-              key={label}
-              className="px-3 py-2 rounded-lg text-xs font-medium cursor-pointer"
-              style={{
-                backgroundColor: idx === 0 ? colors.primary : 'transparent',
-                color: idx === 0 ? '#fff' : `${colors.text}cc`,
-              }}
-            >
-              {label}
-            </div>
-          ))}
-        </nav>
-      </div>
-      <div className="flex-1 flex flex-col">
-        <div className="px-6 py-4 border-b" style={{ borderColor: `${colors.text}10` }}>
-          <h2 className="text-xl font-bold" style={{ color: colors.text }}>
-            Welcome back!
-          </h2>
-        </div>
-        <div className="px-6 py-4">
-          <div className="grid grid-cols-4 gap-3 mb-6">
-            {[
-              { label: 'Total Leads', value: '1,234' },
-              { label: 'Active Deals', value: '89' },
-              { label: 'Revenue', value: '$125K' },
-              { label: 'Conversion', value: '24%' },
-            ].map((stat) => (
-              <div
-                key={stat.label}
-                className="p-4 rounded-lg border shadow-sm"
-                style={{ backgroundColor: colors.surface, borderColor: `${colors.text}10` }}
-              >
-                <p className="text-xs mb-1" style={{ color: `${colors.text}99` }}>
-                  {stat.label}
-                </p>
-                <p className="text-xl font-bold" style={{ color: colors.text }}>
-                  {stat.value}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
+        <pre className="flex-1 p-4 text-xs leading-relaxed font-mono text-[#d4d4d4] overflow-auto">
+          <code>{current.content}</code>
+        </pre>
       </div>
     </div>
   );
 }
 
-function renderERPPreview(
-  projectName: string,
-  colors: {
-    primary: string;
-    secondary: string;
-    accent: string;
-    background: string;
-    surface: string;
-    text: string;
-  },
-) {
+function IframePreview({ html, deviceWidth }: { html: string; deviceWidth: string }) {
   return (
-    <div className="h-full flex" style={{ backgroundColor: colors.background }}>
-      <div
-        className="w-48 border-r"
-        style={{ backgroundColor: colors.surface, borderColor: `${colors.text}10` }}
-      >
-        <div className="px-4 py-4 border-b" style={{ borderColor: `${colors.text}10` }}>
-          <span className="font-bold text-sm" style={{ color: colors.text }}>
-            {projectName || 'ERP Suite'}
-          </span>
-        </div>
-        <nav className="px-3 py-4 space-y-1">
-          {['Dashboard', 'Orders', 'Inventory', 'Suppliers', 'Billing'].map((label, idx) => (
-            <div
-              key={label}
-              className="px-3 py-2 rounded-lg text-xs font-medium cursor-pointer"
-              style={{
-                backgroundColor: idx === 0 ? colors.primary : 'transparent',
-                color: idx === 0 ? '#fff' : `${colors.text}cc`,
-              }}
-            >
-              {label}
-            </div>
-          ))}
-        </nav>
-      </div>
-      <div className="flex-1 flex flex-col">
-        <div className="px-6 py-4 border-b" style={{ borderColor: `${colors.text}10` }}>
-          <h2 className="text-xl font-bold" style={{ color: colors.text }}>
-            Enterprise Dashboard
-          </h2>
-        </div>
-        <div className="px-6 py-4">
-          <div className="grid grid-cols-4 gap-3 mb-6">
-            {[
-              { label: 'Total Orders', value: '2,456' },
-              { label: 'Inventory Items', value: '18.2K' },
-              { label: 'Suppliers', value: '234' },
-              { label: 'Revenue', value: '$892K' },
-            ].map((stat) => (
-              <div
-                key={stat.label}
-                className="p-4 rounded-lg border shadow-sm"
-                style={{ backgroundColor: colors.surface, borderColor: `${colors.text}10` }}
-              >
-                <p className="text-xs mb-1" style={{ color: `${colors.text}99` }}>
-                  {stat.label}
-                </p>
-                <p className="text-xl font-bold" style={{ color: colors.text }}>
-                  {stat.value}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
+    <div className="h-full overflow-hidden bg-gray-100 flex items-start justify-center">
+      <div className={cn('h-full overflow-auto transition-all duration-300 bg-white', deviceWidth)}>
+        <iframe
+          srcDoc={html}
+          className="w-full h-full border-0"
+          title="Live Preview"
+          sandbox="allow-scripts allow-same-origin"
+        />
       </div>
     </div>
   );
 }
 
-function renderMobileAppPreview(
-  projectName: string,
-  colors: {
-    primary: string;
-    secondary: string;
-    accent: string;
-    background: string;
-    surface: string;
-    text: string;
-  },
-) {
-  return (
-    <div
-      className="h-full flex items-center justify-center p-4"
-      style={{ backgroundColor: colors.background }}
-    >
-      <div
-        className="rounded-[40px] border-8 overflow-hidden shadow-2xl w-72"
-        style={{ borderColor: '#1a1a1a' }}
-      >
-        <div
-          className="px-4 py-2 pt-8 text-center text-xs text-white font-medium"
-          style={{ backgroundColor: colors.primary }}
-        >
-          9:41
-        </div>
-        <div className="px-4 py-4" style={{ backgroundColor: colors.background }}>
-          <h2 className="text-lg font-bold text-center mb-4" style={{ color: colors.text }}>
-            {projectName || 'App Name'}
-          </h2>
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            {['Chat', 'Stats', 'Pay', 'Users', 'Files', 'Chat'].slice(0, 6).map((label, idx) => (
-              <div
-                key={idx}
-                className="flex flex-col items-center p-3 rounded-xl border"
-                style={{ backgroundColor: colors.surface, borderColor: `${colors.text}10` }}
-              >
-                <div
-                  className="w-10 h-10 rounded-xl mb-2"
-                  style={{ backgroundColor: `${colors.primary}20` }}
-                />
-                <span className="text-[10px] font-medium" style={{ color: colors.text }}>
-                  {label}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function renderSaaSPreview(
-  projectName: string,
-  selectedFeatures: string[],
-  colors: {
-    primary: string;
-    secondary: string;
-    accent: string;
-    background: string;
-    surface: string;
-    text: string;
-  },
-) {
-  return (
-    <div className="h-full flex" style={{ backgroundColor: colors.background }}>
-      <div
-        className="w-48 border-r"
-        style={{ backgroundColor: colors.surface, borderColor: `${colors.text}10` }}
-      >
-        <div className="px-4 py-4 border-b" style={{ borderColor: `${colors.text}10` }}>
-          <span className="font-bold text-sm" style={{ color: colors.text }}>
-            {projectName || 'SaaS App'}
-          </span>
-        </div>
-        <nav className="px-3 py-4 space-y-1">
-          {['Dashboard', 'Team', 'Projects', 'Analytics', 'Settings'].map((label, idx) => (
-            <div
-              key={label}
-              className="px-3 py-2 rounded-lg text-xs font-medium cursor-pointer"
-              style={{
-                backgroundColor: idx === 0 ? colors.primary : 'transparent',
-                color: idx === 0 ? '#fff' : `${colors.text}cc`,
-              }}
-            >
-              {label}
-            </div>
-          ))}
-        </nav>
-      </div>
-      <div className="flex-1 flex flex-col">
-        <div className="px-6 py-4 border-b" style={{ borderColor: `${colors.text}10` }}>
-          <h2 className="text-xl font-bold" style={{ color: colors.text }}>
-            Dashboard Overview
-          </h2>
-        </div>
-        <div className="px-6 py-4">
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            {[
-              { label: 'Active Users', value: '8,234' },
-              { label: 'Projects', value: '1,456' },
-              { label: 'Revenue', value: '$45.2K' },
-            ].map((stat) => (
-              <div
-                key={stat.label}
-                className="p-4 rounded-xl border shadow-sm"
-                style={{ backgroundColor: colors.surface, borderColor: `${colors.text}10` }}
-              >
-                <p className="text-xs mb-1" style={{ color: `${colors.text}99` }}>
-                  {stat.label}
-                </p>
-                <p className="text-2xl font-bold" style={{ color: colors.text }}>
-                  {stat.value}
-                </p>
-              </div>
-            ))}
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            {selectedFeatures.slice(0, 4).map((feature, idx) => (
-              <div
-                key={idx}
-                className="p-4 rounded-xl border"
-                style={{ backgroundColor: colors.surface, borderColor: `${colors.text}10` }}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <div
-                    className="w-8 h-8 rounded-lg"
-                    style={{ backgroundColor: `${colors.primary}20` }}
-                  />
-                  <span className="text-sm font-semibold" style={{ color: colors.text }}>
-                    {feature}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function renderPreview(
-  applicationType: ApplicationType,
-  projectName: string,
-  selectedFeatures: string[],
-  colors: {
-    primary: string;
-    secondary: string;
-    accent: string;
-    background: string;
-    surface: string;
-    text: string;
-  },
-) {
-  switch (applicationType) {
-    case 'Website':
-      return renderWebsitePreview(projectName, selectedFeatures, colors);
-    case 'CRM':
-      return renderCRMPreview(projectName, colors);
-    case 'ERP':
-      return renderERPPreview(projectName, colors);
-    case 'Mobile App':
-      return renderMobileAppPreview(projectName, colors);
-    case 'SaaS Platform':
-      return renderSaaSPreview(projectName, selectedFeatures, colors);
-    default:
-      return renderWebsitePreview(projectName, selectedFeatures, colors);
-  }
-}
-
-export function LivePreviewPanel() {
+function FullScreenPreview({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
   const {
-    projectName,
-    applicationType,
-    selectedFeatures,
-    theme,
     previewDevice,
-    showPreview,
     previewKey,
     isGenerating,
     hasGenerated,
+    generatedSchema,
+    previewHtml,
+    generatedFiles,
+    isCodeGenerating,
+    showCode,
     setPreviewDevice,
     refreshPreview,
-    setShowPreview,
+    setShowCode,
   } = useBuilderStore();
 
-  if (!showPreview) return null;
+  if (!open) return null;
 
-  const colors = getEffectiveColors(theme);
+  const hasCode = generatedFiles.length > 0 && previewHtml;
 
   return (
-    <div className="h-full flex flex-col bg-card">
+    <div className="fixed inset-0 z-50 flex flex-col bg-background">
       <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold">Live Preview</h3>
@@ -534,6 +250,7 @@ export function LivePreviewPanel() {
               <button
                 key={device.id}
                 type="button"
+                aria-label={device.label}
                 onClick={() => setPreviewDevice(device.id)}
                 className={cn(
                   'p-1.5 rounded-md transition-colors',
@@ -548,38 +265,218 @@ export function LivePreviewPanel() {
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {hasCode && (
+            <div className="flex items-center border rounded-md overflow-hidden mr-1">
+              <button
+                type="button"
+                onClick={() => setShowCode(false)}
+                className={cn(
+                  'px-2.5 py-1.5 text-xs font-medium flex items-center gap-1 transition-colors',
+                  !showCode
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <EyeIcon className="h-3 w-3" />
+                Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCode(true)}
+                className={cn(
+                  'px-2.5 py-1.5 text-xs font-medium flex items-center gap-1 transition-colors',
+                  showCode
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Code2 className="h-3 w-3" />
+                Code
+              </button>
+            </div>
+          )}
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={refreshPreview}>
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={() => setShowPreview(false)}
-          >
-            <EyeOff className="h-3.5 w-3.5" />
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+            <X className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
 
       <div className="flex-1 overflow-hidden relative">
-        {isGenerating && !hasGenerated && <PreviewSkeleton applicationType={applicationType} />}
+        {isGenerating && !hasGenerated && <PreviewSkeleton />}
 
-        {(!isGenerating || hasGenerated) && (
-          <div
-            key={previewKey}
-            className={cn(
-              'h-full overflow-auto mx-auto transition-all duration-300',
-              DEVICE_WIDTHS[previewDevice],
-              previewDevice !== 'desktop' && 'border-x border-border shadow-xl',
-            )}
-          >
-            <div className="h-full">
-              {renderPreview(applicationType, projectName, selectedFeatures, colors)}
+        {isCodeGenerating && !showCode && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60 backdrop-blur-sm">
+            <div className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Generating live preview...
             </div>
           </div>
         )}
+
+        {(!isGenerating || hasGenerated) && (
+          <>
+            {hasCode && showCode ? (
+              <CodePreview files={generatedFiles} />
+            ) : hasCode && !showCode ? (
+              <IframePreview html={previewHtml!} deviceWidth={DEVICE_WIDTHS[previewDevice]} />
+            ) : generatedSchema ? (
+              <div
+                key={previewKey}
+                className={cn(
+                  'h-full overflow-auto mx-auto transition-all duration-300',
+                  DEVICE_WIDTHS[previewDevice],
+                  previewDevice !== 'desktop' && 'border-x border-border shadow-xl',
+                )}
+              >
+                <div className="h-full">{renderSchemaPreview(generatedSchema)}</div>
+              </div>
+            ) : (
+              <EmptyPreview />
+            )}
+          </>
+        )}
       </div>
     </div>
+  );
+}
+
+export function LivePreviewPanel() {
+  const [isFullScreen, setIsFullScreen] = useState(false);
+
+  const {
+    previewDevice,
+    showPreview,
+    previewKey,
+    isGenerating,
+    hasGenerated,
+    generatedSchema,
+    previewHtml,
+    generatedFiles,
+    isCodeGenerating,
+    showCode,
+    setPreviewDevice,
+    refreshPreview,
+    setShowPreview,
+    setShowCode,
+  } = useBuilderStore();
+
+  if (!showPreview) return null;
+
+  const hasCode = generatedFiles.length > 0 && previewHtml;
+
+  return (
+    <>
+      <FullScreenPreview open={isFullScreen} onClose={() => setIsFullScreen(false)} />
+      <div className="h-full flex flex-col bg-card">
+        <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold">Live Preview</h3>
+            <div className="flex items-center gap-1">
+              {DEVICES.map((device) => (
+                <button
+                  key={device.id}
+                  type="button"
+                  aria-label={device.label}
+                  onClick={() => setPreviewDevice(device.id)}
+                  className={cn(
+                    'p-1.5 rounded-md transition-colors',
+                    previewDevice === device.id
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+                  )}
+                >
+                  <device.icon className="h-3.5 w-3.5" />
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            {hasCode && (
+              <div className="flex items-center border rounded-md overflow-hidden mr-1">
+                <button
+                  type="button"
+                  onClick={() => setShowCode(false)}
+                  className={cn(
+                    'px-2.5 py-1.5 text-xs font-medium flex items-center gap-1 transition-colors',
+                    !showCode
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <EyeIcon className="h-3 w-3" />
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCode(true)}
+                  className={cn(
+                    'px-2.5 py-1.5 text-xs font-medium flex items-center gap-1 transition-colors',
+                    showCode
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <Code2 className="h-3 w-3" />
+                  Code
+                </button>
+              </div>
+            )}
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsFullScreen(true)} title="Full screen">
+              <Maximize2 className="h-3.5 w-3.5" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={refreshPreview}>
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => setShowPreview(false)}
+            >
+              <EyeOff className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-hidden relative">
+          {isGenerating && !hasGenerated && <PreviewSkeleton />}
+
+          {isCodeGenerating && !showCode && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60 backdrop-blur-sm">
+              <div className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                Generating live preview...
+              </div>
+            </div>
+          )}
+
+          {(!isGenerating || hasGenerated) && (
+            <>
+              {hasCode && showCode ? (
+                <CodePreview files={generatedFiles} />
+              ) : hasCode && !showCode ? (
+                <IframePreview html={previewHtml!} deviceWidth={DEVICE_WIDTHS[previewDevice]} />
+              ) : generatedSchema ? (
+                <div
+                  key={previewKey}
+                  className={cn(
+                    'h-full overflow-auto mx-auto transition-all duration-300',
+                    DEVICE_WIDTHS[previewDevice],
+                    previewDevice !== 'desktop' && 'border-x border-border shadow-xl',
+                  )}
+                >
+                  <div className="h-full">{renderSchemaPreview(generatedSchema)}</div>
+                </div>
+              ) : (
+                <EmptyPreview />
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </>
   );
 }

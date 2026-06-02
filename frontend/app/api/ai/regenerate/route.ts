@@ -1,108 +1,149 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import {
   createApiResponse,
   createApiError,
+  enforceRateLimit,
   handleZodError,
+  requireAuth,
   validateBody,
-  getSupabaseClient,
-  getAuthUserId,
+  writeAuditLog,
 } from '@/lib/api-utils';
-import { RegenerateSchema } from '@/lib/schemas';
-import { AIClient } from '@/lib/ai/client';
+import { AISettingsSchema, RegenerateSchema } from '@/lib/schemas';
+import { generateSolutionSchema } from '@/lib/ai/client';
+import { persistGeneratedSchema } from '@/lib/ai/persistence';
+import { toGenerationInput } from '@/lib/db-mappers';
+import { validateSolutionSchema } from '@/lib/solution-schema';
+
+const VARIATION_TEMPERATURES: Record<string, number> = {
+  layout: 0.5,
+  modern: 0.7,
+  conservative: 0.3,
+};
 
 export async function POST(request: NextRequest) {
   try {
-    const userId = getAuthUserId(request);
-    if (!userId) {
-      return createApiError({ code: 'UNAUTHORIZED', message: 'Authentication required' }, 401);
-    }
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
+
+    const limited = enforceRateLimit(request, auth.userId, 'ai:regenerate-schema', 10);
+    if (limited) return limited;
 
     const body = await request.json();
     const data = validateBody(RegenerateSchema, body);
 
-    const supabase = getSupabaseClient();
-    const { data: project, error: projectError } = await supabase
+    const { data: project, error: projectError } = await auth.supabase
       .from('projects')
       .select('*')
       .eq('id', data.projectId)
-      .eq('user_id', userId)
+      .eq('user_id', auth.userId)
       .single();
 
     if (projectError || !project) {
       return createApiError({ code: 'NOT_FOUND', message: 'Project not found' }, 404);
     }
 
-    const { data: previousSchema, error: prevError } = await supabase
-      .from('schemas')
-      .select('schema')
+    const { data: previousSchema, error: prevError } = await auth.supabase
+      .from('generated_schemas')
+      .select('id, schema')
       .eq('id', data.schemaId)
+      .eq('project_id', data.projectId)
+      .eq('user_id', auth.userId)
       .single();
 
-    if (prevError) {
+    if (prevError || !previousSchema) {
       return createApiError({ code: 'NOT_FOUND', message: 'Previous schema not found' }, 404);
     }
 
-    const variationHints: Record<string, string> = {
-      layout: 'Completely restructure the layout while keeping the same features.',
-      modern: 'Apply modern design patterns, glassmorphism, rounded corners, and bold typography.',
-      conservative: 'Use a clean, traditional layout with minimal visual complexity.',
-    };
+    const { data: settingsRow } = await auth.supabase
+      .from('ai_settings')
+      .select('*')
+      .eq('user_id', auth.userId)
+      .maybeSingle();
 
-    const hint = variationHints[data.variation] || variationHints.layout;
-    const feedbackLine = data.feedback ? `\nAdditional feedback: ${data.feedback}` : '';
+    const settings = AISettingsSchema.parse(
+      settingsRow
+        ? {
+            provider: settingsRow.provider,
+            model: settingsRow.model,
+            maxTokens: settingsRow.max_tokens,
+            temperature: settingsRow.temperature,
+            promptConfiguration: settingsRow.prompt_configuration,
+          }
+        : {},
+    );
 
-    const system =
-      'You are an expert UI/UX architect. Generate a variation of a UI schema. ' +
-      'Output ONLY valid JSON with no markdown formatting.';
+    const input = toGenerationInput({
+      projectId: data.projectId,
+      name: project.name,
+      description: data.feedback
+        ? `${project.description}\nRegeneration feedback: ${data.feedback}`
+        : project.description,
+      targetAudience: project.target_audience,
+      location: project.location || '',
+      applicationType: project.application_type,
+      features: Array.isArray(project.features) ? project.features : [],
+      theme: project.theme,
+      customColors: project.custom_colors || undefined,
+      variation: data.variation,
+    });
 
-    const prompt = `Regenerate the following UI schema with a variation.
+    const generation = await generateSolutionSchema(input, {
+      model: settings.model,
+      maxOutputTokens: settings.maxTokens,
+      temperature: VARIATION_TEMPERATURES[data.variation] ?? settings.temperature,
+    });
+    const validation = validateSolutionSchema(generation.schema);
 
-  Variation: ${data.variation}
-  Hint: ${hint}${feedbackLine}
-
-  Previous schema:
-  ${JSON.stringify(previousSchema.schema, null, 2)}
-
-  Return the complete regenerated JSON schema.`;
-
-    const ai = new AIClient({ temperature: data.variation === 'modern' ? 0.7 : 0.3 });
-    const startTime = Date.now();
-    const result = await ai.generateWithRetry(prompt, system);
-    const processingTimeMs = Date.now() - startTime;
-
-    let regeneratedSchema: Record<string, unknown>;
-    try {
-      regeneratedSchema = JSON.parse(result.content);
-    } catch {
+    if (!validation.success) {
       return createApiError(
-        { code: 'AI_PARSE_ERROR', message: 'Failed to parse regenerated schema as JSON' },
-        502,
+        {
+          code: 'SCHEMA_VALIDATION_ERROR',
+          message: 'Generated schema failed validation',
+          details: validation.error.flatten(),
+        },
+        422,
       );
     }
 
-    const { data: newSchema, error: dbError } = await supabase
-      .from('schemas')
-      .insert({
-        project_id: data.projectId,
-        schema: regeneratedSchema,
-        token_usage: {
-          input: result.inputTokens,
-          output: result.outputTokens,
-          total: result.inputTokens + result.outputTokens,
-        },
-        processing_time_ms: processingTimeMs,
+    const persisted = await persistGeneratedSchema({
+      supabase: auth.supabase,
+      userId: auth.userId,
+      projectId: data.projectId,
+      schema: validation.data,
+      variation: data.variation,
+      prompt: {
+        previousSchemaId: previousSchema.id,
+        feedback: data.feedback || null,
         variation: data.variation,
-        user_id: userId,
-        parent_schema_id: data.schemaId,
-      })
-      .select()
-      .single();
+      },
+      tokenUsage: generation.tokenUsage,
+      processingTimeMs: generation.processingTimeMs,
+      provider: generation.provider,
+      fallbackReason: generation.fallbackReason,
+      operation: 'regenerate_schema',
+      model: generation.model,
+      requestPayload: {
+        projectId: data.projectId,
+        schemaId: data.schemaId,
+        variation: data.variation,
+      },
+      parentSchemaId: data.schemaId,
+    });
 
-    if (dbError) {
-      return createApiError({ code: 'DB_INSERT_ERROR', message: dbError.message }, 500);
-    }
+    await writeAuditLog(auth.supabase, request, {
+      userId: auth.userId,
+      projectId: data.projectId,
+      entityId: persisted.id,
+      entityType: 'generated_schema',
+      action: 'ai.schema_regenerated',
+      metadata: {
+        previousSchemaId: previousSchema.id,
+        variation: data.variation,
+        fallbackReason: generation.fallbackReason,
+      },
+    });
 
-    return createApiResponse(newSchema, 201);
+    return createApiResponse(persisted, 201);
   } catch (err) {
     return handleZodError(err);
   }

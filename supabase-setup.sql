@@ -1,0 +1,3 @@
+-- This file has been consolidated into supabase-migration.sql
+-- Run supabase-migration.sql in the Supabase Dashboard SQL Editor instead.
+-- This file is kept for reference only and will be removed in a future cleanup.

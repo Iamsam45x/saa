@@ -1,8 +1,5 @@
 {
-  "extends": [
-    "next/core-web-vitals",
-    "prettier"
-  ],
+  "extends": ["next/core-web-vitals", "prettier"],
   "plugins": ["prettier"],
   "rules": {
     "prettier/prettier": "error",
@@ -11,6 +8,6 @@
     "react/jsx-props-no-spreading": "off",
     "import/prefer-default-export": "off",
     "import/extensions": "off",
-    "jsx-a11y/control-has-associated-label": "warn"
+    "jsx-a11y/control-has-associated-label": "off"
   }
 }

@@ -1,5 +1,13 @@
 import { create } from 'zustand';
+import { toast } from 'sonner';
 import type { ApplicationType, ThemeType, Feature } from '@/types';
+import type { SolutionSchemaType } from '@/lib/solution-schema';
+import { getAccessToken } from '@/components/auth/auth-context';
+
+export interface GeneratedFile {
+  path: string;
+  content: string;
+}
 
 export interface CustomColors {
   primary: string;
@@ -27,6 +35,24 @@ export interface BuilderFormState {
   customColors: CustomColors;
 }
 
+export interface GeneratedVersion {
+  id: string;
+  version: number;
+  schema: SolutionSchemaType;
+  tokenUsage: {
+    input: number;
+    output: number;
+    total: number;
+  };
+  processingTimeMs: number;
+  variation: string;
+  projectId: string | null;
+  provider: 'anthropic' | 'local';
+  fallbackReason: string | null;
+  storage: string;
+  createdAt: string;
+}
+
 type GenerationStep =
   | 'idle'
   | 'analyzing'
@@ -37,6 +63,10 @@ type GenerationStep =
   | 'error';
 
 interface BuilderState extends BuilderFormState {
+  currentProjectId: string | null;
+  generatedSchema: SolutionSchemaType | null;
+  versions: GeneratedVersion[];
+  activeVersionId: string | null;
   isGenerating: boolean;
   generationStep: GenerationStep;
   generationStepLabel: string;
@@ -49,6 +79,12 @@ interface BuilderState extends BuilderFormState {
   showPreview: boolean;
   previewKey: number;
   missingFields: string[];
+  saveStatus: 'idle' | 'saving' | 'saved' | 'error';
+  saveError: string;
+  previewHtml: string | null;
+  generatedFiles: GeneratedFile[];
+  isCodeGenerating: boolean;
+  showCode: boolean;
 
   setProjectName: (name: string) => void;
   setDescription: (desc: string) => void;
@@ -67,18 +103,22 @@ interface BuilderState extends BuilderFormState {
   refreshPreview: () => void;
 
   generateSchema: () => Promise<void>;
-  regenerate: (variation: string) => void;
+  generatePreviewCode: () => Promise<void>;
+  regenerate: (variation: string) => Promise<void>;
+  saveProject: () => Promise<void>;
+  restoreVersion: (versionId: string) => void;
   undo: () => void;
   resetForm: () => void;
   validateForm: () => string[];
+  setShowCode: (show: boolean) => void;
 }
 
 const GENERATION_STEPS: Record<GenerationStep, string> = {
   idle: '',
   analyzing: 'Analyzing requirements...',
-  selecting: 'Selecting components...',
-  generating: 'Generating schema...',
-  rendering: 'Rendering preview...',
+  selecting: 'Selecting registry components...',
+  generating: 'Generating structured schema...',
+  rendering: 'Rendering validated preview...',
   complete: 'Generation complete',
   error: 'Generation failed',
 };
@@ -112,9 +152,24 @@ function captureSnapshot(state: BuilderState): Partial<BuilderFormState> {
   };
 }
 
+function appendAction(state: BuilderState, action: Omit<BuilderAction, 'id' | 'timestamp'>) {
+  return [
+    ...state.actionHistory.slice(-4),
+    {
+      id: crypto.randomUUID(),
+      timestamp: Date.now(),
+      ...action,
+    },
+  ];
+}
+
 export const useBuilderStore = create<BuilderState>((set, get) => ({
   ...INITIAL_FORM,
 
+  currentProjectId: null,
+  generatedSchema: null,
+  versions: [],
+  activeVersionId: null,
   isGenerating: false,
   generationStep: 'idle',
   generationStepLabel: '',
@@ -127,68 +182,86 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   showPreview: true,
   previewKey: 0,
   missingFields: [],
+  saveStatus: 'idle',
+  saveError: '',
+  previewHtml: null,
+  generatedFiles: [],
+  isCodeGenerating: false,
+  showCode: false,
 
   setProjectName: (projectName) => {
     const snapshot = captureSnapshot(get());
     set((state) => ({
       projectName,
-      actionHistory: [
-        ...state.actionHistory.slice(-2),
-        {
-          id: crypto.randomUUID(),
-          type: 'field',
-          description: 'Updated project name',
-          timestamp: Date.now(),
-          snapshot,
-        },
-      ],
+      hasGenerated: false,
+      saveStatus: 'idle',
+      actionHistory: appendAction(state, {
+        type: 'field',
+        description: 'Updated project name',
+        snapshot,
+      }),
       missingFields: [],
     }));
   },
 
-  setDescription: (description) => set({ description, missingFields: [] }),
+  setIndustry: () => {},
 
-  setTargetAudience: (targetAudience) => set({ targetAudience }),
+  setDescription: (description) =>
+    set({ description, hasGenerated: false, saveStatus: 'idle', missingFields: [] }),
 
-  setLocation: (location) => set({ location }),
+  setTargetAudience: (targetAudience) =>
+    set({ targetAudience, hasGenerated: false, saveStatus: 'idle', missingFields: [] }),
 
-  setApplicationType: (applicationType) => set({ applicationType }),
+  setLocation: (location) => set({ location, hasGenerated: false, saveStatus: 'idle' }),
 
-  setSelectedFeatures: (selectedFeatures) => set({ selectedFeatures }),
+  setApplicationType: (applicationType) =>
+    set({
+      applicationType,
+      hasGenerated: false,
+      generatedSchema: null,
+      activeVersionId: null,
+      saveStatus: 'idle',
+      previewHtml: null,
+      generatedFiles: [],
+      isCodeGenerating: false,
+    }),
+
+  setSelectedFeatures: (selectedFeatures) =>
+    set({ selectedFeatures, hasGenerated: false, saveStatus: 'idle', missingFields: [] }),
 
   addFeature: (feature) =>
     set((state) => ({
       selectedFeatures: state.selectedFeatures.includes(feature)
         ? state.selectedFeatures
         : [...state.selectedFeatures, feature],
+      hasGenerated: false,
+      saveStatus: 'idle',
+      missingFields: [],
     })),
 
   removeFeature: (feature) =>
     set((state) => ({
       selectedFeatures: state.selectedFeatures.filter((f) => f !== feature),
+      hasGenerated: false,
+      saveStatus: 'idle',
     })),
 
-  setTheme: (theme) => set({ theme }),
+  setTheme: (theme) => set({ theme, hasGenerated: false, saveStatus: 'idle' }),
 
   setCustomColors: (colors) =>
     set((state) => ({
       customColors: { ...state.customColors, ...colors },
+      hasGenerated: false,
+      saveStatus: 'idle',
     })),
 
   applyCustomColors: () => {
     const { customColors } = get();
-    const themeColors = {
-      primary: customColors.primary,
-      secondary: customColors.secondary,
-      accent: customColors.accent,
-      background: customColors.background,
-      surface: customColors.background,
-      text: customColors.primary,
-    };
-    document.documentElement.style.setProperty('--custom-primary', themeColors.primary);
-    document.documentElement.style.setProperty('--custom-secondary', themeColors.secondary);
-    document.documentElement.style.setProperty('--custom-accent', themeColors.accent);
-    document.documentElement.style.setProperty('--custom-background', themeColors.background);
+    document.documentElement.style.setProperty('--custom-primary', customColors.primary);
+    document.documentElement.style.setProperty('--custom-secondary', customColors.secondary);
+    document.documentElement.style.setProperty('--custom-accent', customColors.accent);
+    document.documentElement.style.setProperty('--custom-background', customColors.background);
+    set((state) => ({ previewKey: state.previewKey + 1 }));
   },
 
   setSelectedVariation: (selectedVariation) => set({ selectedVariation }),
@@ -196,6 +269,8 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   setPreviewDevice: (previewDevice) => set({ previewDevice }),
 
   setShowPreview: (showPreview) => set({ showPreview }),
+
+  setShowCode: (showCode) => set({ showCode }),
 
   refreshPreview: () => set((state) => ({ previewKey: state.previewKey + 1 })),
 
@@ -214,48 +289,215 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       tokenUsage: 0,
       processingTime: 0,
       missingFields: [],
+      saveStatus: 'idle',
+      saveError: '',
     });
 
     const startTime = Date.now();
-    const steps: GenerationStep[] = ['analyzing', 'selecting', 'generating', 'rendering'];
+    const state = get();
+    const variation = state.selectedVariation || 'layout';
 
-    for (const step of steps) {
-      await new Promise((resolve) => setTimeout(resolve, 800 + Math.random() * 600));
-      set({
-        generationStep: step,
-        generationStepLabel: GENERATION_STEPS[step],
-        tokenUsage: get().tokenUsage + Math.floor(Math.random() * 50 + 20),
-        processingTime: Date.now() - startTime,
+    try {
+      set({ generationStep: 'selecting', generationStepLabel: GENERATION_STEPS.selecting });
+
+      const token = await getAccessToken();
+      const res = await fetch('/api/ai/generate-schema', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          projectId: state.currentProjectId || undefined,
+          name: state.projectName,
+          description: state.description,
+          targetAudience: state.targetAudience,
+          location: state.location,
+          applicationType: state.applicationType,
+          features: state.selectedFeatures,
+          theme: state.theme,
+          customColors: state.customColors,
+          variation,
+        }),
       });
+
+      set({ generationStep: 'generating', generationStepLabel: GENERATION_STEPS.generating });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error?.message || `API error (${res.status})`);
+      }
+
+      const payload: GeneratedVersion = await res.json();
+      const snapshot = captureSnapshot(get());
+
+      set({ generationStep: 'rendering', generationStepLabel: GENERATION_STEPS.rendering });
+
+      set((current) => ({
+        isGenerating: false,
+        hasGenerated: true,
+        generationStep: 'complete',
+        generationStepLabel: GENERATION_STEPS.complete,
+        generatedSchema: payload.schema,
+        activeVersionId: payload.id,
+        versions: [...current.versions, payload],
+        currentProjectId: payload.projectId || current.currentProjectId,
+        tokenUsage: payload.tokenUsage?.total || 0,
+        processingTime: payload.processingTimeMs || Date.now() - startTime,
+        previewKey: current.previewKey + 1,
+        actionHistory: appendAction(current, {
+          type: 'generate',
+          description: `Generated version ${payload.version || current.versions.length + 1}`,
+          snapshot,
+        }),
+      }));
+    } catch (err) {
+      set({
+        isGenerating: false,
+        hasGenerated: false,
+        generationStep: 'error',
+        generationStepLabel: err instanceof Error ? err.message : 'Generation failed',
+      });
+      return;
     }
 
-    const snapshot = captureSnapshot(get());
-
-    set((state) => ({
-      isGenerating: false,
-      hasGenerated: true,
-      generationStep: 'complete',
-      generationStepLabel: GENERATION_STEPS.complete,
-      processingTime: Date.now() - startTime,
-      actionHistory: [
-        ...state.actionHistory.slice(-2),
-        {
-          id: crypto.randomUUID(),
-          type: 'generate',
-          description: `Generated UI schema for "${state.projectName}"`,
-          timestamp: Date.now(),
-          snapshot,
-        },
-      ],
-    }));
+    get().generatePreviewCode();
   },
 
-  regenerate: (variation) => {
+  generatePreviewCode: async () => {
+    const state = get();
+    if (!state.generatedSchema) return;
+
+    set({ isCodeGenerating: true });
+
+    try {
+      const token = await getAccessToken();
+      const res = await fetch('/api/ai/generate-preview', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          projectId: state.currentProjectId || undefined,
+          name: state.projectName,
+          description: state.description,
+          targetAudience: state.targetAudience,
+          location: state.location,
+          applicationType: state.applicationType,
+          features: state.selectedFeatures,
+          theme: state.theme,
+          customColors: state.customColors,
+          variation: state.selectedVariation || 'layout',
+          schema: state.generatedSchema,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error?.message || `Code generation error (${res.status})`);
+      }
+
+      const payload = await res.json();
+      set({
+        previewHtml: payload.previewHtml || null,
+        generatedFiles: Array.isArray(payload.files) ? payload.files : [],
+        isCodeGenerating: false,
+      });
+    } catch (err) {
+      set({ isCodeGenerating: false });
+      const message = err instanceof Error ? err.message : 'Preview code generation failed';
+      toast.error('Code generation failed', { description: message });
+      console.error('Preview code generation failed:', err);
+    }
+  },
+
+  regenerate: async (variation) => {
     set({
       selectedVariation: variation,
       hasGenerated: false,
     });
-    get().generateSchema();
+    await get().generateSchema();
+  },
+
+  saveProject: async () => {
+    const missing = get().validateForm();
+    if (missing.length > 0) {
+      set({ missingFields: missing });
+      return;
+    }
+
+    if (!get().generatedSchema) {
+      await get().generateSchema();
+    }
+
+    const state = get();
+    if (!state.generatedSchema) return;
+
+    set({ saveStatus: 'saving', saveError: '' });
+
+    try {
+      const token = await getAccessToken();
+      const res = await fetch('/api/projects/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          name: state.projectName,
+          description: state.description,
+          targetAudience: state.targetAudience,
+          location: state.location,
+          applicationType: state.applicationType,
+          features: state.selectedFeatures,
+          theme: state.theme,
+          customColors: state.customColors,
+          schema: state.generatedSchema,
+          status: 'In Progress',
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error?.message || `Save failed (${res.status})`);
+      }
+
+      const project = await res.json();
+      const projectId = project.id || project.projectId || state.currentProjectId;
+
+      set((current) => ({
+        currentProjectId: projectId,
+        saveStatus: 'saved',
+        actionHistory: appendAction(current, {
+          type: 'save',
+          description: `Saved "${state.projectName}"`,
+          snapshot: captureSnapshot(current),
+        }),
+      }));
+    } catch (err) {
+      set({
+        saveStatus: 'error',
+        saveError: err instanceof Error ? err.message : 'Save failed',
+      });
+    }
+  },
+
+  restoreVersion: (versionId) => {
+    const version = get().versions.find((item) => item.id === versionId);
+    if (!version) return;
+
+    set((state) => ({
+      generatedSchema: version.schema,
+      activeVersionId: version.id,
+      hasGenerated: true,
+      previewKey: state.previewKey + 1,
+      actionHistory: appendAction(state, {
+        type: 'restore',
+        description: `Restored version ${version.version}`,
+        snapshot: captureSnapshot(state),
+      }),
+    }));
   },
 
   undo: () => {
@@ -269,14 +511,23 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       ...prevState,
       actionHistory: state.actionHistory.slice(0, -1),
       hasGenerated: false,
+      generatedSchema: null,
+      activeVersionId: null,
       generationStep: 'idle',
       generationStepLabel: '',
+      saveStatus: 'idle',
+      previewHtml: null,
+      generatedFiles: [],
     }));
   },
 
   resetForm: () =>
     set({
       ...INITIAL_FORM,
+      currentProjectId: null,
+      generatedSchema: null,
+      versions: [],
+      activeVersionId: null,
       isGenerating: false,
       generationStep: 'idle',
       generationStepLabel: '',
@@ -286,6 +537,12 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       selectedVariation: '',
       previewKey: 0,
       missingFields: [],
+      saveStatus: 'idle',
+      saveError: '',
+      previewHtml: null,
+      generatedFiles: [],
+      isCodeGenerating: false,
+      showCode: false,
     }),
 
   validateForm: () => {

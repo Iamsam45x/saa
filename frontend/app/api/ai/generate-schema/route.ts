@@ -1,65 +1,145 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import {
   createApiResponse,
   createApiError,
+  enforceRateLimit,
   handleZodError,
+  requireAuth,
   validateBody,
-  getSupabaseClient,
-  getAuthUserId,
+  writeAuditLog,
 } from '@/lib/api-utils';
-import { GenerateSchemaSchema } from '@/lib/schemas';
-import { AIClient, buildSchemaPrompt } from '@/lib/ai/client';
+import { AISettingsSchema, GenerateSchemaSchema } from '@/lib/schemas';
+import { toGenerationInput } from '@/lib/db-mappers';
+import { generateSolutionSchema } from '@/lib/ai/client';
+import { buildSchemaPrompt } from '@/lib/ai/client';
+import { persistGeneratedSchema } from '@/lib/ai/persistence';
+import { validateSolutionSchema } from '@/lib/solution-schema';
 
 export async function POST(request: NextRequest) {
   try {
-    const userId = getAuthUserId(request);
-    if (!userId) {
-      return createApiError({ code: 'UNAUTHORIZED', message: 'Authentication required' }, 401);
-    }
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
+
+    const limited = enforceRateLimit(request, auth.userId, 'ai:generate-schema', 10);
+    if (limited) return limited;
 
     const body = await request.json();
-    const data = validateBody(GenerateSchemaSchema, body);
+    const data = toGenerationInput(validateBody(GenerateSchemaSchema, body));
 
-    const ai = new AIClient();
-    const { prompt, system } = buildSchemaPrompt(data);
+    if (data.projectId) {
+      const { data: project } = await auth.supabase
+        .from('projects')
+        .select('id')
+        .eq('id', data.projectId)
+        .eq('user_id', auth.userId)
+        .maybeSingle();
 
-    const startTime = Date.now();
-    const result = await ai.generateWithRetry(prompt, system);
-    const processingTimeMs = Date.now() - startTime;
+      if (!project) {
+        return createApiError({ code: 'NOT_FOUND', message: 'Project not found' }, 404);
+      }
+    }
 
-    let schema: Record<string, unknown>;
-    try {
-      schema = JSON.parse(result.content);
-    } catch {
+    const { data: settingsRow } = await auth.supabase
+      .from('ai_settings')
+      .select('*')
+      .eq('user_id', auth.userId)
+      .maybeSingle();
+
+    const settings = AISettingsSchema.parse(
+      settingsRow
+        ? {
+            provider: settingsRow.provider,
+            model: settingsRow.model,
+            maxTokens: settingsRow.max_tokens,
+            temperature: settingsRow.temperature,
+            promptConfiguration: settingsRow.prompt_configuration,
+          }
+        : {},
+    );
+
+    const generation = await generateSolutionSchema(data, {
+      model: settings.model,
+      maxOutputTokens: settings.maxTokens,
+      temperature: settings.temperature,
+    });
+    const validation = validateSolutionSchema(generation.schema);
+
+    if (!validation.success) {
       return createApiError(
-        { code: 'AI_PARSE_ERROR', message: 'Failed to parse AI response as JSON' },
-        502,
+        {
+          code: 'SCHEMA_VALIDATION_ERROR',
+          message: 'Generated schema failed validation',
+          details: validation.error.flatten(),
+        },
+        422,
       );
     }
 
-    const supabase = getSupabaseClient();
-    const { data: schemaRecord, error: dbError } = await supabase
-      .from('schemas')
-      .insert({
-        project_id: data.projectId || null,
-        schema,
-        token_usage: {
-          input: result.inputTokens,
-          output: result.outputTokens,
-          total: result.inputTokens + result.outputTokens,
+    const prompt = buildSchemaPrompt(data);
+    let persisted: Record<string, unknown> | null = null;
+    try {
+      persisted = await persistGeneratedSchema({
+        supabase: auth.supabase,
+        userId: auth.userId,
+        projectId: data.projectId || null,
+        schema: validation.data,
+        variation: data.variation,
+        prompt: {
+          system: settings.promptConfiguration.systemPrompt || prompt.system,
+          input: prompt.prompt,
+          model: settings.model,
         },
-        processing_time_ms: processingTimeMs,
-        variation: data.variation || 'layout',
-        user_id: userId,
-      })
-      .select()
-      .single();
-
-    if (dbError) {
-      return createApiError({ code: 'DB_INSERT_ERROR', message: dbError.message }, 500);
+        tokenUsage: generation.tokenUsage,
+        processingTimeMs: generation.processingTimeMs,
+        provider: generation.provider,
+        fallbackReason: generation.fallbackReason,
+        operation: 'generate_schema',
+        model: generation.model,
+        requestPayload: {
+          projectId: data.projectId || null,
+          applicationType: data.applicationType,
+          features: data.features,
+          theme: data.theme,
+          variation: data.variation,
+        },
+      });
+    } catch {
+      console.warn('Schema persistence failed, returning schema without DB storage');
     }
 
-    return createApiResponse(schemaRecord, 201);
+    try {
+      await writeAuditLog(auth.supabase, request, {
+        userId: auth.userId,
+        projectId: data.projectId || null,
+        entityId: persisted?.id as string | undefined,
+        entityType: 'generated_schema',
+        action: 'ai.schema_generated',
+        metadata: {
+          provider: generation.provider,
+          fallbackReason: generation.fallbackReason,
+          variation: data.variation,
+        },
+      });
+    } catch {
+      console.warn('Audit log write failed, continuing');
+    }
+
+    return createApiResponse(
+      persisted || {
+        id: crypto.randomUUID(),
+        projectId: null,
+        version: 1,
+        schema: validation.data,
+        tokenUsage: generation.tokenUsage,
+        processingTimeMs: generation.processingTimeMs,
+        variation: data.variation,
+        provider: generation.provider,
+        fallbackReason: generation.fallbackReason,
+        storage: 'none',
+        createdAt: new Date().toISOString(),
+      },
+      201,
+    );
   } catch (err) {
     return handleZodError(err);
   }

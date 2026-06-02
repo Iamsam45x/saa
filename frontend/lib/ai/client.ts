@@ -1,8 +1,13 @@
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+import type { GenerateSchemaInput } from '@/lib/schemas';
+import { validateSolutionSchema } from '@/lib/solution-schema';
+import { buildLocalSolutionSchema, buildOrchestrationPrompt } from '@/lib/ai/orchestrator';
+
+const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_VERSION = '2023-06-01';
 
 interface AIClientOptions {
   model?: string;
-  maxTokens?: number;
+  maxOutputTokens?: number;
   temperature?: number;
 }
 
@@ -10,19 +15,43 @@ interface AIClientResponse {
   content: string;
   inputTokens: number;
   outputTokens: number;
+  provider: 'anthropic';
+}
+
+function extractOutputText(data: any): string {
+  if (!Array.isArray(data?.content)) return '';
+
+  return data.content
+    .map((item: any) => {
+      if (item?.type === 'text' && typeof item.text === 'string') return item.text;
+      return '';
+    })
+    .join('')
+    .trim();
+}
+
+function stripJsonFences(value: string) {
+  return value
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
 }
 
 export class AIClient {
   private apiKey: string;
   private model: string;
-  private maxTokens: number;
+  private maxOutputTokens: number;
   private temperature: number;
 
   constructor(options: AIClientOptions = {}) {
     this.apiKey = process.env.ANTHROPIC_API_KEY || '';
-    this.model = options.model || 'claude-sonnet-4-20250514';
-    this.maxTokens = options.maxTokens || 4096;
+    this.model = options.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
+    this.maxOutputTokens = options.maxOutputTokens || 4096;
     this.temperature = options.temperature ?? 0.3;
+  }
+
+  getModel() {
+    return this.model;
   }
 
   async generate(prompt: string, systemPrompt?: string): Promise<AIClientResponse> {
@@ -30,20 +59,18 @@ export class AIClient {
       throw new Error('ANTHROPIC_API_KEY is not configured');
     }
 
-    const startTime = Date.now();
-
-    const response = await fetch(ANTHROPIC_API_URL, {
+    const response = await fetch(ANTHROPIC_MESSAGES_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
+        'anthropic-version': ANTHROPIC_VERSION,
       },
       body: JSON.stringify({
         model: this.model,
-        max_tokens: this.maxTokens,
+        max_tokens: this.maxOutputTokens,
         temperature: this.temperature,
-        system: systemPrompt,
+        system: systemPrompt || 'Return valid JSON only.',
         messages: [{ role: 'user', content: prompt }],
       }),
     });
@@ -54,14 +81,13 @@ export class AIClient {
     }
 
     const data = await response.json();
-    const content = data.content
-      .map((block: { type: string; text: string }) => (block.type === 'text' ? block.text : ''))
-      .join('');
+    const content = extractOutputText(data);
 
     return {
       content,
       inputTokens: data.usage?.input_tokens || 0,
       outputTokens: data.usage?.output_tokens || 0,
+      provider: 'anthropic',
     };
   }
 
@@ -72,13 +98,13 @@ export class AIClient {
   ): Promise<AIClientResponse> {
     let lastError: Error | null = null;
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
       try {
         return await this.generate(prompt, systemPrompt);
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         if (attempt < maxRetries) {
-          const delay = Math.min(1000 * 2 ** attempt, 10000);
+          const delay = Math.min(1000 * 2 ** (attempt - 1), 4000);
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
@@ -88,33 +114,57 @@ export class AIClient {
   }
 }
 
-export function buildSchemaPrompt(input: {
-  name: string;
-  description: string;
-  targetAudience: string;
-  applicationType: string;
-  features: string[];
-  theme: string;
-}): { prompt: string; system: string } {
-  const system =
-    'You are an expert UI/UX architect. Generate a complete JSON UI schema for the given application. ' +
-    'Output ONLY valid JSON with no markdown formatting or explanation. ' +
-    'The schema must follow this structure: ' +
-    '{ "layout": { "type": string, "columns": number }, ' +
-    '"navigation": { "type": string, "items": Array<{label:string, href:string, icon?:string}> }, ' +
-    '"pages": Array<{ name: string, path: string, sections: Array<{ type: string, title: string, content: any }> }>, ' +
-    '"components": Array<{ id: string, type: string, props: Record<string,any> }>, ' +
-    '"theme": { "colors": Record<string,string>, "typography": Record<string,string>, "spacing": Record<string,string> } }';
+export function buildSchemaPrompt(input: GenerateSchemaInput) {
+  return buildOrchestrationPrompt(input);
+}
 
-  const prompt = `Generate a UI schema for a ${input.applicationType} application.
+export function parseAIJson(content: string) {
+  return JSON.parse(stripJsonFences(content));
+}
 
-  Project: ${input.name}
-  Description: ${input.description}
-  Target Audience: ${input.targetAudience}
-  Theme: ${input.theme}
-  Required Features: ${input.features.join(', ')}
+export async function generateSolutionSchema(
+  input: GenerateSchemaInput,
+  options: AIClientOptions = {},
+) {
+  const { prompt, system } = buildSchemaPrompt(input);
+  const startTime = Date.now();
 
-  Return a complete JSON schema including layout, navigation, pages, components, and theme configuration.`;
+  try {
+    const ai = new AIClient(options);
+    const result = await ai.generateWithRetry(prompt, system);
+    const parsed = parseAIJson(result.content);
+    const validation = validateSolutionSchema(parsed);
 
-  return { prompt, system };
+    if (!validation.success) {
+      throw new Error(validation.error.message);
+    }
+
+    return {
+      schema: validation.data,
+      tokenUsage: {
+        input: result.inputTokens,
+        output: result.outputTokens,
+        total: result.inputTokens + result.outputTokens,
+      },
+      processingTimeMs: Date.now() - startTime,
+      provider: result.provider,
+      fallbackReason: null as string | null,
+      model: new AIClient(options).getModel(),
+    };
+  } catch (err) {
+    const fallbackSchema = buildLocalSolutionSchema(input);
+
+    return {
+      schema: fallbackSchema,
+      tokenUsage: {
+        input: 0,
+        output: 0,
+        total: 0,
+      },
+      processingTimeMs: Date.now() - startTime,
+      provider: 'local' as const,
+      fallbackReason: err instanceof Error ? err.message : 'AI generation unavailable',
+      model: options.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
+    };
+  }
 }

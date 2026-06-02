@@ -208,7 +208,9 @@ All schemas are defined in [lib/schemas.ts](lib/schemas.ts) using Zod.
 
 ```typescript
 // Response 200
-{ success: true }
+{
+  success: true;
+}
 ```
 
 ### GET /api/projects/user/:userId
@@ -511,8 +513,8 @@ async function deleteProject(id: string) {
 
   try {
     // 2. Fire actual API call
-    const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
-    if (!res.ok) throw new Error("Delete failed");
+    const res = await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Delete failed');
   } catch {
     // 3. Rollback on failure
     useProjectStore.getState().setProjects(previousProjects);
@@ -522,12 +524,12 @@ async function deleteProject(id: string) {
 
 ### Sync Strategy
 
-| Direction | Mechanism | Notes |
-|-----------|-----------|-------|
-| Store → API | Explicit save (button click) | No auto-sync; user controls persistence |
-| API → Store | Fetch on page load | `useEffect` in layout/page components |
-| Store → URL | `next/navigation` searchParams | Optional: serialize form state to URL for shareable links |
-| API → DB | Supabase client in route handlers | Row-Level Security enforced by user_id |
+| Direction   | Mechanism                         | Notes                                                     |
+| ----------- | --------------------------------- | --------------------------------------------------------- |
+| Store → API | Explicit save (button click)      | No auto-sync; user controls persistence                   |
+| API → Store | Fetch on page load                | `useEffect` in layout/page components                     |
+| Store → URL | `next/navigation` searchParams    | Optional: serialize form state to URL for shareable links |
+| API → DB    | Supabase client in route handlers | Row-Level Security enforced by user_id                    |
 
 ---
 
@@ -589,14 +591,14 @@ Does NOT retry on:
 
 ### Temperature Configuration
 
-| Operation | Temperature | Rationale |
-|-----------|-------------|-----------|
-| Initial schema generation | 0.3 | Consistent, predictable output |
-| Regenerate — "modern" | 0.7 | Allow creative divergence |
-| Regenerate — "conservative" | 0.3 | Stay close to original |
-| Regenerate — "layout" | 0.5 | Moderate creativity |
-| Code generation | 0.1 | Deterministic, correct syntax |
-| PDF export | 0.1 | Accurate data rendering |
+| Operation                   | Temperature | Rationale                      |
+| --------------------------- | ----------- | ------------------------------ |
+| Initial schema generation   | 0.3         | Consistent, predictable output |
+| Regenerate — "modern"       | 0.7         | Allow creative divergence      |
+| Regenerate — "conservative" | 0.3         | Stay close to original         |
+| Regenerate — "layout"       | 0.5         | Moderate creativity            |
+| Code generation             | 0.1         | Deterministic, correct syntax  |
+| PDF export                  | 0.1         | Accurate data rendering        |
 
 ### Prompt Structure
 

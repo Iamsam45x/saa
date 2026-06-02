@@ -32,7 +32,7 @@ export const FEATURES = [
   'Email Integration',
   'Live Chat',
   'Reports & Analytics',
-  'Multi-Language Support',
+  'Multi Language Support',
   'API Integrations',
 ] as const;
 

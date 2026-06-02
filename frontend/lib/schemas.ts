@@ -19,6 +19,8 @@ export const CustomColorsSchema = z.object({
   background: z.string().regex(/^#[0-9a-fA-F]{6}$/),
 });
 
+export const ProjectStatusEnum = z.enum(['Draft', 'In Progress', 'Completed']);
+
 // ─── Project ──────────────────────────────────────────────────────────────────
 
 export const CreateProjectSchema = z.object({
@@ -30,6 +32,8 @@ export const CreateProjectSchema = z.object({
   features: z.array(FeatureSchema).min(1, 'At least one feature is required'),
   theme: ThemeTypeEnum,
   customColors: CustomColorsSchema.optional(),
+  schema: z.record(z.any()).optional(),
+  status: ProjectStatusEnum.optional().default('Draft'),
 });
 
 export const UpdateProjectSchema = CreateProjectSchema.partial();
@@ -44,6 +48,7 @@ export const ProjectResponseSchema = z.object({
   features: z.array(z.string()),
   theme: ThemeTypeEnum,
   customColors: CustomColorsSchema.optional(),
+  status: ProjectStatusEnum.optional(),
   userId: z.string().uuid(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -86,7 +91,8 @@ export const RegenerateSchema = z.object({
 
 export const AISchemaResponseSchema = z.object({
   id: z.string().uuid(),
-  projectId: z.string().uuid(),
+  projectId: z.string().uuid().nullable(),
+  version: z.number().optional(),
   schema: z.record(z.any()),
   tokenUsage: z.object({
     input: z.number(),
@@ -95,6 +101,9 @@ export const AISchemaResponseSchema = z.object({
   }),
   processingTimeMs: z.number(),
   variation: z.string().optional(),
+  provider: z.enum(['anthropic', 'local']).optional(),
+  fallbackReason: z.string().nullable().optional(),
+  storage: z.string().optional(),
   createdAt: z.string().datetime(),
 });
 
@@ -115,6 +124,23 @@ export const TemplateSchema = z.object({
 export const TemplateListResponseSchema = z.object({
   templates: z.array(TemplateSchema),
   total: z.number(),
+});
+
+export const CreateTemplateSchema = z.object({
+  name: z.string().min(1, 'Template name is required').max(200),
+  description: z.string().min(1, 'Template description is required').max(1000),
+  type: ApplicationTypeEnum,
+  features: z.array(FeatureSchema).default([]),
+  theme: ThemeTypeEnum.default('corporate-blue'),
+  customColors: CustomColorsSchema.optional(),
+  schema: z.record(z.any()).optional(),
+  sourceProjectId: z.string().uuid().optional(),
+  isPublic: z.boolean().optional().default(false),
+});
+
+export const CloneTemplateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  createProject: z.boolean().optional().default(false),
 });
 
 // ─── Export ───────────────────────────────────────────────────────────────────
@@ -163,6 +189,39 @@ export const ExportResponseSchema = z.object({
   expiresAt: z.string().datetime(),
 });
 
+export const AISettingsSchema = z.object({
+  provider: z.literal('anthropic').default('anthropic'),
+  model: z.string().min(1).max(120).default('claude-sonnet-4-20250514'),
+  maxTokens: z.number().int().min(512).max(8192).default(4096),
+  temperature: z.number().min(0).max(1).default(0.3),
+  promptConfiguration: z
+    .object({
+      systemPrompt: z.string().max(5000).optional(),
+      schemaPromptPrefix: z.string().max(5000).optional(),
+      enforceRegistry: z.boolean().optional().default(true),
+    })
+    .optional()
+    .default({ enforceRegistry: true }),
+});
+
+export const UpdateAISettingsSchema = AISettingsSchema.partial();
+
+export const SaveGeneratedSchemaSchema = z.object({
+  projectId: z.string().uuid().optional(),
+  schema: z.record(z.any()),
+  variation: z.enum(['layout', 'modern', 'conservative']).optional().default('layout'),
+  prompt: z.record(z.any()).optional(),
+  tokenUsage: z
+    .object({
+      input: z.number().int().min(0),
+      output: z.number().int().min(0),
+      total: z.number().int().min(0),
+    })
+    .optional()
+    .default({ input: 0, output: 0, total: 0 }),
+  processingTimeMs: z.number().int().min(0).optional().default(0),
+});
+
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
 export const ComponentRegistrySchema = z.object({
@@ -193,6 +252,11 @@ export type UpdateProjectInput = z.infer<typeof UpdateProjectSchema>;
 export type GenerateSchemaInput = z.infer<typeof GenerateSchemaSchema>;
 export type GenerateCodeInput = z.infer<typeof GenerateCodeSchema>;
 export type RegenerateInput = z.infer<typeof RegenerateSchema>;
+export type CreateTemplateInput = z.infer<typeof CreateTemplateSchema>;
+export type CloneTemplateInput = z.infer<typeof CloneTemplateSchema>;
 export type ExportReactInput = z.infer<typeof ExportReactSchema>;
 export type ExportHtmlInput = z.infer<typeof ExportHtmlSchema>;
 export type ExportPdfInput = z.infer<typeof ExportPdfSchema>;
+export type AISettingsInput = z.infer<typeof AISettingsSchema>;
+export type UpdateAISettingsInput = z.infer<typeof UpdateAISettingsSchema>;
+export type SaveGeneratedSchemaInput = z.infer<typeof SaveGeneratedSchemaSchema>;
