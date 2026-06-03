@@ -214,13 +214,7 @@ function IframePreview({ html, deviceWidth }: { html: string; deviceWidth: strin
   );
 }
 
-function FullScreenPreview({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
+function FullScreenPreview({ open, onClose }: { open: boolean; onClose: () => void }) {
   const {
     previewDevice,
     previewKey,
@@ -424,7 +418,13 @@ export function LivePreviewPanel() {
                 </button>
               </div>
             )}
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsFullScreen(true)} title="Full screen">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => setIsFullScreen(true)}
+              title="Full screen"
+            >
               <Maximize2 className="h-3.5 w-3.5" />
             </Button>
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={refreshPreview}>

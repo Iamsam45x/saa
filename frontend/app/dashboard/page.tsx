@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   PlusCircle,
   Folder,
@@ -28,9 +29,11 @@ interface Project {
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [templateCount, setTemplateCount] = useState(8);
 
   useEffect(() => {
     fetchProjects();
@@ -40,12 +43,21 @@ export default function DashboardPage() {
     try {
       const token = await getAccessToken();
       if (!token) return;
-      const res = await fetch('/api/projects?pageSize=4', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error('Failed to fetch projects');
-      const data = await res.json();
-      setProjects(data.projects || []);
+      const [projRes, tmplRes] = await Promise.all([
+        fetch('/api/projects?pageSize=4', {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch('/api/templates', {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ]);
+      if (!projRes.ok) throw new Error('Failed to fetch projects');
+      const projData = await projRes.json();
+      setProjects(projData.projects || []);
+      if (tmplRes.ok) {
+        const tmplData = await tmplRes.json();
+        setTemplateCount(tmplData.templates?.length || tmplData.length || 8);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
     } finally {
@@ -60,8 +72,13 @@ export default function DashboardPage() {
       icon: Folder,
       color: 'from-cyan-500 to-teal-500',
     },
-    { label: 'Active Templates', value: '12', icon: Layout, color: 'from-blue-500 to-cyan-500' },
-    { label: 'Team Members', value: '6', icon: Users, color: 'from-teal-500 to-emerald-500' },
+    {
+      label: 'Active Templates',
+      value: String(templateCount),
+      icon: Layout,
+      color: 'from-blue-500 to-cyan-500',
+    },
+    { label: 'Team Members', value: '1', icon: Users, color: 'from-teal-500 to-emerald-500' },
   ];
 
   const quickActions = [
@@ -235,7 +252,11 @@ export default function DashboardPage() {
                   </thead>
                   <tbody className="divide-y">
                     {projects.map((project) => (
-                      <tr key={project.id} className="hover:bg-muted/30 transition-colors">
+                      <tr
+                        key={project.id}
+                        className="hover:bg-muted/30 transition-colors cursor-pointer"
+                        onClick={() => router.push(`/builder?projectId=${project.id}`)}
+                      >
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
                             <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-500 to-teal-500">

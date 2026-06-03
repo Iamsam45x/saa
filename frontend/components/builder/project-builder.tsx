@@ -1,7 +1,9 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useBuilderStore } from '@/store/builder-store';
+import { useAuth, getAccessToken } from '@/components/auth/auth-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -18,10 +20,132 @@ import { ThemeSelector } from '@/components/builder/theme-selector';
 import { CustomColorPicker } from '@/components/builder/custom-color-picker';
 import { AIControls } from '@/components/builder/ai-controls';
 import { LivePreviewPanel } from '@/components/preview/live-preview-panel';
-import { Sparkles, RotateCcw, Eye } from 'lucide-react';
-import type { ApplicationType } from '@/types';
+import { Sparkles, RotateCcw, Eye, Save, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { toast } from 'sonner';
+import type { ApplicationType, Feature, ThemeType } from '@/types';
+
+const TEMPLATES_MAP: Record<
+  string,
+  {
+    projectName: string;
+    description: string;
+    targetAudience: string;
+    applicationType: ApplicationType;
+    selectedFeatures: Feature[];
+    theme: ThemeType;
+  }
+> = {
+  'corporate-website': {
+    projectName: 'Corporate Website',
+    description: 'Professional business website with hero section, features, and contact form',
+    targetAudience: 'Business professionals and corporate clients',
+    applicationType: 'Website',
+    selectedFeatures: ['User Authentication', 'Analytics Dashboard', 'Notifications', 'Live Chat'],
+    theme: 'corporate-blue',
+  },
+  'e-commerce-store': {
+    projectName: 'E-Commerce Store',
+    description: 'Full-featured online store with product catalog and shopping cart',
+    targetAudience: 'Online shoppers and retail customers',
+    applicationType: 'SaaS Platform',
+    selectedFeatures: [
+      'Product Catalog',
+      'Payment Gateway',
+      'Order Management',
+      'Billing & Invoicing',
+      'Notifications',
+    ],
+    theme: 'dark-mode',
+  },
+  'crm-pipeline': {
+    projectName: 'CRM Pipeline',
+    description: 'Complete customer relationship management with lead tracking',
+    targetAudience: 'Sales teams and customer service representatives',
+    applicationType: 'CRM',
+    selectedFeatures: [
+      'Customer Management',
+      'Lead Management',
+      'CRM Pipeline',
+      'Analytics Dashboard',
+      'Email Integration',
+    ],
+    theme: 'minimal-white',
+  },
+  'inventory-management': {
+    projectName: 'Inventory Management',
+    description: 'Enterprise-grade inventory tracking and management system',
+    targetAudience: 'Warehouse managers and logistics coordinators',
+    applicationType: 'ERP',
+    selectedFeatures: [
+      'Inventory Management',
+      'Order Management',
+      'Billing & Invoicing',
+      'Reports & Analytics',
+      'Notifications',
+    ],
+    theme: 'neon-gradient',
+  },
+  'mobile-app-mvp': {
+    projectName: 'Mobile App MVP',
+    description: 'Cross-platform mobile application with essential features',
+    targetAudience: 'Mobile-first users and startup customers',
+    applicationType: 'Mobile App',
+    selectedFeatures: [
+      'User Authentication',
+      'Notifications',
+      'File Uploads',
+      'Live Chat',
+      'Analytics Dashboard',
+    ],
+    theme: 'custom-brand',
+  },
+  'analytics-dashboard': {
+    projectName: 'Analytics Dashboard',
+    description: 'Data visualization and analytics reporting platform',
+    targetAudience: 'Data analysts and business executives',
+    applicationType: 'SaaS Platform',
+    selectedFeatures: [
+      'Analytics Dashboard',
+      'Reports & Analytics',
+      'User Management',
+      'Notifications',
+      'API Integrations',
+    ],
+    theme: 'dark-mode',
+  },
+  'project-management': {
+    projectName: 'Project Management',
+    description: 'Team collaboration and project tracking platform',
+    targetAudience: 'Project managers and team leads',
+    applicationType: 'SaaS Platform',
+    selectedFeatures: [
+      'Project Management',
+      'Task Management',
+      'Calendar & Scheduling',
+      'File Uploads',
+      'Notifications',
+    ],
+    theme: 'corporate-blue',
+  },
+  'client-portal': {
+    projectName: 'Client Portal',
+    description: 'Secure client access portal with document sharing',
+    targetAudience: 'Clients and external stakeholders',
+    applicationType: 'Website',
+    selectedFeatures: [
+      'User Authentication',
+      'Document Management',
+      'File Uploads',
+      'Notifications',
+      'Live Chat',
+    ],
+    theme: 'minimal-white',
+  },
+};
 
 export function ProjectBuilder() {
+  const searchParams = useSearchParams();
+  const { user } = useAuth();
   const {
     projectName,
     description,
@@ -30,6 +154,8 @@ export function ProjectBuilder() {
     applicationType,
     theme,
     showPreview,
+    saveStatus,
+    saveError,
     setProjectName,
     setDescription,
     setTargetAudience,
@@ -37,7 +163,54 @@ export function ProjectBuilder() {
     setApplicationType,
     resetForm,
     setShowPreview,
+    saveProject,
+    loadProject,
+    validateForm,
+    missingFields,
   } = useBuilderStore();
+
+  useEffect(() => {
+    const template = searchParams.get('template');
+    const projectId = searchParams.get('projectId');
+
+    if (template && TEMPLATES_MAP[template]) {
+      loadProject(TEMPLATES_MAP[template]);
+    } else if (projectId) {
+      (async () => {
+        try {
+          const token = await getAccessToken();
+          if (!token) return;
+          const res = await fetch(`/api/projects/${projectId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (res.ok) {
+            const project = await res.json();
+            loadProject({
+              projectName: project.name,
+              description: project.description,
+              targetAudience: project.target_audience,
+              location: project.location,
+              applicationType: project.application_type,
+              selectedFeatures: project.features || [],
+              theme: project.theme,
+              customColors: project.custom_colors,
+            });
+          }
+        } catch {
+          toast.error('Failed to load project');
+        }
+      })();
+    }
+  }, [searchParams, loadProject]);
+
+  async function handleSave() {
+    const missing = validateForm();
+    if (missing.length > 0) {
+      toast.error('Please fill in all required fields');
+      return;
+    }
+    await saveProject();
+  }
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -178,7 +351,31 @@ export function ProjectBuilder() {
                 <Eye className="h-4 w-4" />
                 Preview
               </Button>
+              <Button
+                className={
+                  saveStatus === 'saving'
+                    ? 'h-11 gap-2 cursor-not-allowed'
+                    : 'h-11 gap-2 bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-600 hover:to-teal-600'
+                }
+                onClick={handleSave}
+                disabled={saveStatus === 'saving'}
+              >
+                {saveStatus === 'saving' ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : saveStatus === 'saved' ? (
+                  <CheckCircle2 className="h-4 w-4" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved' : 'Save'}
+              </Button>
             </div>
+            {saveStatus === 'error' && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-xs">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{saveError || 'Failed to save project'}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>

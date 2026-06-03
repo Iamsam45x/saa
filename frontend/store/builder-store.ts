@@ -111,6 +111,17 @@ interface BuilderState extends BuilderFormState {
   resetForm: () => void;
   validateForm: () => string[];
   setShowCode: (show: boolean) => void;
+  setIndustry: (industry: string) => void;
+  loadProject: (project: {
+    projectName?: string;
+    description?: string;
+    targetAudience?: string;
+    location?: string;
+    applicationType?: ApplicationType;
+    selectedFeatures?: Feature[];
+    theme?: ThemeType;
+    customColors?: CustomColors;
+  }) => void;
 }
 
 const GENERATION_STEPS: Record<GenerationStep, string> = {
@@ -204,7 +215,40 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
     }));
   },
 
-  setIndustry: () => {},
+  setIndustry: (industry: string) => {
+    set({ description: industry, hasGenerated: false, saveStatus: 'idle' });
+  },
+
+  loadProject: (project: {
+    projectName?: string;
+    description?: string;
+    targetAudience?: string;
+    location?: string;
+    applicationType?: ApplicationType;
+    selectedFeatures?: Feature[];
+    theme?: ThemeType;
+    customColors?: CustomColors;
+  }) =>
+    set({
+      projectName: project.projectName ?? '',
+      description: project.description ?? '',
+      targetAudience: project.targetAudience ?? '',
+      location: project.location ?? '',
+      applicationType: project.applicationType ?? 'Website',
+      selectedFeatures: project.selectedFeatures ?? [],
+      theme: project.theme ?? 'corporate-blue',
+      customColors: project.customColors ?? {
+        primary: '#10b981',
+        secondary: '#059669',
+        accent: '#34d399',
+        background: '#f0fdf4',
+      },
+      hasGenerated: false,
+      generatedSchema: null,
+      saveStatus: 'idle',
+      previewHtml: null,
+      generatedFiles: [],
+    }),
 
   setDescription: (description) =>
     set({ description, hasGenerated: false, saveStatus: 'idle', missingFields: [] }),
