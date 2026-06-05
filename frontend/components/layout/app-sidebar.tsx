@@ -18,6 +18,7 @@ import {
   Download,
   LogOut,
   User,
+  TrendingUp,
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
@@ -28,6 +29,7 @@ const navigationItems = [
   { name: 'Project Builder', href: '/builder', icon: PlusCircle },
   { name: 'Saved Projects', href: '/saved', icon: Bookmark },
   { name: 'Templates', href: '/templates', icon: Layout },
+  { name: 'Digital Marketing', href: '/digital-marketing', icon: TrendingUp },
   { name: 'Export', href: '/export', icon: Download },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
